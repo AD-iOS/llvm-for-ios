@@ -1,0 +1,135 @@
+name: Build LLVM for Jailbreak iOS (Full)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+    - name: Clone iOS SDK
+      run: |
+        git clone https://github.com/xybp888/iOS-SDKs.git
+        echo "SDKROOT=$(pwd)/iOS-SDKs/iPhoneOS16.5.sdk" >> $GITHUB_ENV
+    
+    - name: Clone LLVM
+      run: |
+        git clone --depth 1 https://github.com/llvm/llvm-project.git
+    
+    # 第一步：編譯 native tablegen 工具
+    - name: Build Native TableGen
+      run: |
+        mkdir build-native
+        cd build-native
+        unset SDKROOT
+        cmake -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DLLVM_TARGETS_TO_BUILD="AArch64" \
+          -DLLVM_ENABLE_PROJECTS="clang;lld;compiler-rt" \
+          -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" \
+          ../llvm-project/llvm
+        ninja llvm-tblgen clang-tblgen lld-tblgen
+    
+    # 第二步：交叉編譯完整 LLVM 工具鏈給 iOS
+    - name: Configure Cross Build
+      run: |
+        mkdir build && cd build
+        cmake -G Ninja \
+          -DCMAKE_BUILD_TYPE=MinSizeRel \
+          -DCMAKE_SYSTEM_NAME=iOS \
+          -DCMAKE_OSX_SYSROOT="$SDKROOT" \
+          -DCMAKE_OSX_ARCHITECTURES="arm64" \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=16.5 \
+          -DCMAKE_SYSTEM_PROCESSOR=arm64 \
+          -DCMAKE_CROSSCOMPILING=ON \
+          -DCMAKE_C_COMPILER_WORKS=ON \
+          -DCMAKE_CXX_COMPILER_WORKS=ON \
+          -DLLVM_HOST_TRIPLE=arm64-apple-darwin \
+          -DLLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-ios16.5 \
+          -DLLVM_TABLEGEN=$(pwd)/../build-native/bin/llvm-tblgen \
+          -DCLANG_TABLEGEN=$(pwd)/../build-native/bin/clang-tblgen \
+          -DLLD_TABLEGEN=$(pwd)/../build-native/bin/lld-tblgen \
+          -DCMAKE_MACOSX_BUNDLE=OFF \
+          -DLLVM_ENABLE_PROJECTS="clang;lld;compiler-rt" \
+          -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" \
+          -DLLVM_TARGETS_TO_BUILD="AArch64" \
+          -DLLVM_INCLUDE_TESTS=OFF \
+          -DLLVM_INCLUDE_EXAMPLES=OFF \
+          -DLLVM_INCLUDE_BENCHMARKS=OFF \
+          -DLLVM_INCLUDE_DOCS=OFF \
+          -DLLVM_BUILD_LLVM_DYLIB=OFF \
+          -DLLVM_LINK_LLVM_DYLIB=OFF \
+          -DLLVM_ENABLE_ZLIB=OFF \
+          -DLLVM_ENABLE_ZSTD=OFF \
+          -DLLVM_ENABLE_TERMINFO=OFF \
+          -DLLVM_ENABLE_LIBCXX=ON \
+          -DLIBCXX_ENABLE_SHARED=OFF \
+          -DLIBCXX_ENABLE_STATIC=ON \
+          -DLIBCXXABI_ENABLE_SHARED=OFF \
+          -DLIBCXXABI_ENABLE_STATIC=ON \
+          -DCOMPILER_RT_ENABLE_IOS=ON \
+          -DCOMPILER_RT_BUILD_SANITIZERS=OFF \
+          -DCOMPILER_RT_BUILD_XRAY=OFF \
+          -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
+          -DCOMPILER_RT_BUILD_PROFILE=ON \
+          ../llvm-project/llvm
+    
+    - name: Build All Tools
+      run: |
+        cd build
+        ninja clang lld llvm-ar llvm-ranlib llvm-strip llvm-objcopy \
+              llvm-objdump llvm-nm llvm-size llvm-strings llvm-readelf \
+              llvm-addr2line llvm-cov llvm-profdata llvm-symbolizer \
+              llvm-dwarfdump llvm-dwp
+    
+    - name: Build Runtimes
+      run: |
+        cd build
+        ninja runtimes
+    
+    - name: Package Full Toolchain
+      run: |
+        cd build
+        mkdir -p package/usr/local/bin \
+                 package/usr/local/lib/clang/23/lib/darwin \
+                 package/usr/local/include/c++/v1
+        
+        # 複製主要工具
+        cp bin/clang bin/clang++ bin/lld package/usr/local/bin/
+        cp bin/llvm-ar bin/llvm-ranlib bin/llvm-strip package/usr/local/bin/
+        cp bin/llvm-objcopy bin/llvm-objdump bin/llvm-nm package/usr/local/bin/
+        cp bin/llvm-size bin/llvm-strings bin/llvm-readelf package/usr/local/bin/
+        cp bin/llvm-addr2line bin/llvm-cov bin/llvm-profdata package/usr/local/bin/
+        cp bin/llvm-symbolizer bin/llvm-dwarfdump bin/llvm-dwp package/usr/local/bin/ 2>/dev/null || true
+        
+        # 建立常用 symlinks
+        cd package/usr/local/bin
+        ln -sf clang clang-cpp
+        ln -sf llvm-ar ar
+        ln -sf llvm-ranlib ranlib
+        ln -sf llvm-strip strip
+        ln -sf llvm-objcopy objcopy
+        ln -sf llvm-objdump objdump
+        ln -sf llvm-nm nm
+        ln -sf llvm-size size
+        ln -sf llvm-strings strings
+        ln -sf llvm-readelf readelf
+        ln -sf llvm-addr2line addr2line
+        cd ../../../..
+        
+        # 複製 C++ 標準庫標頭
+        cp -r ../llvm-project/libcxx/include/* package/usr/local/include/c++/v1/ 2>/dev/null || true
+        
+        # 複製 compiler-rt builtins
+        cp lib/clang/23/lib/darwin/libclang_rt.*.a package/usr/local/lib/clang/23/lib/darwin/ 2>/dev/null || true
+        
+        # 複製靜態庫
+        cp lib/libc++.a lib/libc++abi.a lib/libunwind.a package/usr/local/lib/ 2>/dev/null || true
+        
+        tar -czf llvm-full-toolchain-ios.tar.gz -C package .
+    
+    - name: Upload Full Toolchain
+      uses: actions/upload-artifact@v4
+      with:
+        name: llvm-full-toolchain-ios
+        path: build/llvm-full-toolchain-ios.tar.gz

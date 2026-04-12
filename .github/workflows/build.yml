@@ -1,4 +1,4 @@
-name: Build LLVM for Jailbreak iOS
+name: Build LLVM(clang/++, lld) for Jailbreak iOS
 
 on:
   workflow_dispatch:
