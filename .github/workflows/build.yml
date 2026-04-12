@@ -16,7 +16,6 @@ jobs:
       run: |
         git clone --depth 1 https://github.com/llvm/llvm-project.git
     
-    # 第一步：編譯 native tablegen 工具
     - name: Build Native TableGen
       run: |
         mkdir build-native
@@ -27,10 +26,8 @@ jobs:
           -DLLVM_TARGETS_TO_BUILD="AArch64" \
           -DLLVM_ENABLE_PROJECTS="clang;lld" \
           ../llvm-project/llvm
-        ninja -j$(sysctl -n hw.ncpu
-) llvm-tblgen clang-tblgen
+        ninja -j$(sysctl -n hw.ncpu) llvm-tblgen clang-tblgen
     
-    # 第二步：交叉編譯給 iOS（靜態連結，避免動態庫問題）
     - name: Configure Cross Build
       run: |
         mkdir build && cd build
@@ -65,8 +62,7 @@ jobs:
     - name: Build
       run: |
         cd build
-        ninja -j$(sysctl -n hw.ncpu
-) clang lld
+        ninja -j$(sysctl -n hw.ncpu) clang lld
     
     - name: Package
       run: |
