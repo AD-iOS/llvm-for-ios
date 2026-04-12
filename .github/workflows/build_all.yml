@@ -31,7 +31,7 @@ jobs:
           -DLLVM_INCLUDE_BENCHMARKS=OFF \
           -DLLVM_BUILD_LLVM_DYLIB=OFF \
           ../llvm-project/llvm
-        ninja llvm-tblgen clang-tblgen llvm-config
+        ninja llvm-tblgen clang-tblgen llvm-config llvm-ar llvm-ranlib
     
     # 第二步：交叉編譯完整 LLVM 工具鏈給 iOS
     - name: Configure Cross Build
@@ -62,6 +62,59 @@ jobs:
           -DLLVM_INCLUDE_DOCS=OFF \
           -DLLVM_BUILD_LLVM_DYLIB=OFF \
           -DLLVM_LINK_LLVM_DYLIB=OFF \
+          -DLLVM_BUILD_UTILS=OFF \
+          -DLLVM_BUILD_TOOLS=ON \
+          -DLLVM_ENABLE_ZLIB=OFF \
+          -DLLVM_ENABLE_ZSTD=OFF \
+          -DLLVM_ENABLE_TERMINFO=OFF \
+          -DLLVM_ENABLE_LIBCXX=ON \
+          -DLIBCXX_ENABLE_SHARED=OFF \
+          -DLIBCXX_ENABLE_STATIC=ON \
+          -DLIBCXXABI_ENABLE_SHARED=OFF \
+          -DLIBCXXABI_ENABLE_STATIC=ON \
+          -DLIBUNWIND_ENABLE_SHARED=OFF \
+          -DLIBUNWIND_ENABLE_STATIC=ON \
+          -DCOMPILER_RT_ENABLE_IOS=ON \
+          -DCOMPILER_RT_BUILD_SANITIZERS=OFF \
+          -DCOMPILER_RT_BUILD_XRAY=OFF \
+          -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
+          -DCOMPILER_RT_BUILD_PROFILE=OFF \
+          -DCOMPILER_RT_BUILD_BUILTINS=ON \
+          -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
+          ../llvm-project/llvm
+    
+    # 手動修復 CMake 快取，防止編譯 llvm-config
+    - name: Fix CMake Cache
+      run: |
+        cd build
+        # 強制設定 LLVM_CONFIG 路徑並標記為已找到
+        echo "set(LLVM_CONFIG_EXECUTABLE $(pwd)/../build-native/bin/llvm-config CACHE FILEPATH \"Path to llvm-config\")" >> CMakeCache.txt
+        echo "set(LLVM_CONFIG_FOUND TRUE CACHE BOOL \"llvm-config found\")" >> CMakeCache.txt
+        
+        # 重新配置以應用變更
+        cmake -G Ninja \
+          -DCMAKE_BUILD_TYPE=MinSizeRel \
+          -DCMAKE_SYSTEM_NAME=iOS \
+          -DCMAKE_OSX_SYSROOT="$SDKROOT" \
+          -DCMAKE_OSX_ARCHITECTURES="arm64" \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=16.5 \
+          -DCMAKE_SYSTEM_PROCESSOR=arm64 \
+          -DCMAKE_CROSSCOMPILING=ON \
+          -DLLVM_HOST_TRIPLE=arm64-apple-darwin \
+          -DLLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-ios16.5 \
+          -DLLVM_TABLEGEN=$(pwd)/../build-native/bin/llvm-tblgen \
+          -DCLANG_TABLEGEN=$(pwd)/../build-native/bin/clang-tblgen \
+          -DCMAKE_MACOSX_BUNDLE=OFF \
+          -DLLVM_ENABLE_PROJECTS="clang;lld" \
+          -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind" \
+          -DLLVM_TARGETS_TO_BUILD="AArch64" \
+          -DLLVM_INCLUDE_TESTS=OFF \
+          -DLLVM_INCLUDE_EXAMPLES=OFF \
+          -DLLVM_INCLUDE_BENCHMARKS=OFF \
+          -DLLVM_INCLUDE_DOCS=OFF \
+          -DLLVM_BUILD_LLVM_DYLIB=OFF \
+          -DLLVM_LINK_LLVM_DYLIB=OFF \
+          -DLLVM_BUILD_UTILS=OFF \
           -DLLVM_ENABLE_ZLIB=OFF \
           -DLLVM_ENABLE_ZSTD=OFF \
           -DLLVM_ENABLE_TERMINFO=OFF \
