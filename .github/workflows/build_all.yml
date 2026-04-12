@@ -16,14 +16,20 @@ jobs:
       run: |
         git clone --depth 1 https://github.com/llvm/llvm-project.git
     
-    # 第一步：編譯 native 工具
+    # 第一步：編譯 native 工具（完全乾淨的環境）
     - name: Build Native Tools
       run: |
+        # 完全清除 iOS SDK 相關環境變數
+        unset SDKROOT
+        unset IPHONEOS_DEPLOYMENT_TARGET
+        export MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion | cut -d. -f1,2)
+        
         mkdir build-native
         cd build-native
-        unset SDKROOT
         cmake -G Ninja \
           -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_OSX_SYSROOT="" \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET="" \
           -DLLVM_TARGETS_TO_BUILD="AArch64" \
           -DLLVM_ENABLE_PROJECTS="clang;lld" \
           -DLLVM_INCLUDE_TESTS=OFF \
@@ -37,15 +43,6 @@ jobs:
     - name: Configure Cross Build
       run: |
         mkdir build && cd build
-        
-        # 複製 native llvm-config 並創建 wrapper 腳本
-        NATIVE_LLVM_CONFIG=$(pwd)/../build-native/bin/llvm-config
-        if [ ! -f "$NATIVE_LLVM_CONFIG" ]; then
-          echo "Building native llvm-config..."
-          cd ../build-native
-          ninja llvm-config
-          cd ../build
-        fi
         
         cmake -G Ninja \
           -DCMAKE_BUILD_TYPE=MinSizeRel \
@@ -61,7 +58,6 @@ jobs:
           -DLLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-ios16.5 \
           -DLLVM_TABLEGEN=$(pwd)/../build-native/bin/llvm-tblgen \
           -DCLANG_TABLEGEN=$(pwd)/../build-native/bin/clang-tblgen \
-          -DLLVM_CONFIG_PATH=$(pwd)/../build-native/bin/llvm-config \
           -DCMAKE_MACOSX_BUNDLE=OFF \
           -DLLVM_ENABLE_PROJECTS="clang;lld" \
           -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind" \
@@ -91,20 +87,13 @@ jobs:
           -DCOMPILER_RT_BUILD_BUILTINS=ON \
           -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
           ../llvm-project/llvm 2>&1 | tee cmake_output.log
-        
-        # 檢查配置是否成功
-        if [ $? -ne 0 ]; then
-          echo "CMake configuration failed!"
-          tail -100 cmake_output.log
-          exit 1
-        fi
     
     - name: Build All Tools
       run: |
         cd build
         ninja clang lld llvm-ar llvm-ranlib llvm-strip llvm-objcopy \
               llvm-objdump llvm-nm llvm-size llvm-strings llvm-readelf \
-              llvm-addr2line llvm-dwarfdump runtimes 2>&1 | tee build_output.log
+              llvm-addr2line llvm-dwarfdump runtimes
     
     - name: Package Full Toolchain
       run: |
@@ -113,7 +102,7 @@ jobs:
                  package/usr/local/lib \
                  package/usr/local/include/c++/v1
         
-        # 複製主要工具（只複製存在的檔案）
+        # 複製主要工具
         for tool in clang clang++ lld llvm-ar llvm-ranlib llvm-strip \
                     llvm-objcopy llvm-objdump llvm-nm llvm-size \
                     llvm-strings llvm-readelf llvm-addr2line llvm-dwarfdump; do
@@ -122,7 +111,7 @@ jobs:
           fi
         done
         
-        # 建立常用 symlinks
+        # 建立 symlinks
         cd package/usr/local/bin
         ln -sf clang clang-cpp 2>/dev/null || true
         ln -sf llvm-ar ar 2>/dev/null || true
@@ -137,12 +126,12 @@ jobs:
         ln -sf llvm-addr2line addr2line 2>/dev/null || true
         cd ../../../..
         
-        # 複製 C++ 標準庫標頭
+        # 複製 C++ 標頭
         if [ -d "../llvm-project/libcxx/include" ]; then
           cp -r ../llvm-project/libcxx/include/* package/usr/local/include/c++/v1/
         fi
         
-        # 複製 runtimes 產出的靜態庫
+        # 複製靜態庫
         for lib in libc++.a libc++abi.a libunwind.a; do
           if [ -f "lib/$lib" ]; then
             cp "lib/$lib" package/usr/local/lib/
@@ -155,7 +144,6 @@ jobs:
           cp -r lib/clang/* package/usr/local/lib/clang/
         fi
         
-        # 檢查是否有產出任何檔案
         echo "Packaged files:"
         find package -type f | head -50
         
@@ -166,12 +154,11 @@ jobs:
       with:
         name: llvm-full-toolchain-ios
         path: build/llvm-full-toolchain-ios.tar.gz
-      if: always()
     
-    - name: Upload CMake Error Log (if failed)
+    - name: Upload CMake Logs (if failed)
       uses: actions/upload-artifact@v4
       with:
-        name: cmake-error-logs
+        name: cmake-logs
         path: |
           build/cmake_output.log
           build/CMakeFiles/CMakeError.log
