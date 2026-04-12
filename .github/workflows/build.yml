@@ -16,11 +16,12 @@ jobs:
       run: |
         git clone --depth 1 https://github.com/llvm/llvm-project.git
     
-    # 第一步：編譯 native tablegen 工具
+    # 第一步：編譯 native tablegen 工具（使用 macOS SDK，不要用 iOS SDK）
     - name: Build Native TableGen
       run: |
         mkdir build-native
         cd build-native
+        unset SDKROOT
         cmake -G Ninja \
           -DCMAKE_BUILD_TYPE=Release \
           -DLLVM_TARGETS_TO_BUILD="AArch64" \
