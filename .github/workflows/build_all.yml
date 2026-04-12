@@ -16,7 +16,7 @@ jobs:
       run: |
         git clone --depth 1 https://github.com/llvm/llvm-project.git
     
-    # 第一步：編譯 native 工具（使用 macOS SDK）
+    # 第一步：編譯 native 工具（完整的 macOS 版本）
     - name: Build Native Tools
       run: |
         MACOS_SDK=$(xcrun --sdk macosx --show-sdk-path)
@@ -33,15 +33,16 @@ jobs:
           -DLLVM_INCLUDE_TESTS=OFF \
           -DLLVM_INCLUDE_EXAMPLES=OFF \
           -DLLVM_INCLUDE_BENCHMARKS=OFF \
-          -DLLVM_BUILD_LLVM_DYLIB=OFF \
           ../llvm-project/llvm
         
-        ninja llvm-tblgen clang-tblgen llvm-config
+        # 建置所有需要的工具
+        ninja llvm-tblgen clang-tblgen llvm-config llvm-ar llvm-ranlib
     
-    # 第二步：交叉編譯給 iOS（使用 iOS SDK）
-    - name: Configure Cross Build
+    # 第二步：建置 iOS 目標的 LLVM 核心（不包含 runtimes）
+    - name: Build LLVM Core for iOS
       run: |
-        mkdir build && cd build
+        mkdir build-ios
+        cd build-ios
         
         cmake -G Ninja \
           -DCMAKE_BUILD_TYPE=MinSizeRel \
@@ -58,9 +59,9 @@ jobs:
           -DLLVM_TABLEGEN=$(pwd)/../build-native/bin/llvm-tblgen \
           -DCLANG_TABLEGEN=$(pwd)/../build-native/bin/clang-tblgen \
           -DLLVM_CONFIG_PATH=$(pwd)/../build-native/bin/llvm-config \
+          -DLLVM_TOOL_LLVM_CONFIG_BUILD=OFF \
           -DCMAKE_MACOSX_BUNDLE=OFF \
           -DLLVM_ENABLE_PROJECTS="clang;lld" \
-          -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind" \
           -DLLVM_TARGETS_TO_BUILD="AArch64" \
           -DLLVM_INCLUDE_TESTS=OFF \
           -DLLVM_INCLUDE_EXAMPLES=OFF \
@@ -69,10 +70,38 @@ jobs:
           -DLLVM_BUILD_LLVM_DYLIB=OFF \
           -DLLVM_LINK_LLVM_DYLIB=OFF \
           -DLLVM_BUILD_UTILS=OFF \
-          -DLLVM_TOOL_LLVM_CONFIG_BUILD=OFF \
           -DLLVM_ENABLE_ZLIB=OFF \
           -DLLVM_ENABLE_ZSTD=OFF \
           -DLLVM_ENABLE_TERMINFO=OFF \
+          -DLLVM_INCLUDE_RUNTIMES=OFF \
+          ../llvm-project/llvm
+        
+        ninja clang lld llvm-ar llvm-ranlib llvm-strip llvm-objcopy \
+              llvm-objdump llvm-nm llvm-size llvm-strings llvm-readelf \
+              llvm-addr2line llvm-dwarfdump llvm-cov llvm-profdata \
+              llvm-symbolizer llvm-dwp
+    
+    # 第三步：單獨建置 runtimes（compiler-rt, libcxx 等）
+    - name: Build Runtimes for iOS
+      run: |
+        mkdir build-runtimes
+        cd build-runtimes
+        
+        # 使用剛建置的 iOS clang 來編譯 runtimes
+        IOS_CLANG=$(pwd)/../build-ios/bin/clang
+        
+        cmake -G Ninja \
+          -DCMAKE_BUILD_TYPE=MinSizeRel \
+          -DCMAKE_SYSTEM_NAME=iOS \
+          -DCMAKE_OSX_SYSROOT="$IOS_SDKROOT" \
+          -DCMAKE_OSX_ARCHITECTURES="arm64" \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=16.5 \
+          -DCMAKE_C_COMPILER="$IOS_CLANG" \
+          -DCMAKE_CXX_COMPILER="$IOS_CLANG++" \
+          -DCMAKE_AR=$(pwd)/../build-ios/bin/llvm-ar \
+          -DCMAKE_RANLIB=$(pwd)/../build-ios/bin/llvm-ranlib \
+          -DCMAKE_CROSSCOMPILING=ON \
+          -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind" \
           -DLLVM_ENABLE_LIBCXX=ON \
           -DLIBCXX_ENABLE_SHARED=OFF \
           -DLIBCXX_ENABLE_STATIC=ON \
@@ -89,56 +118,49 @@ jobs:
           -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
           ../llvm-project/llvm
         
-        # 強制移除 llvm-config 建置目標
-        sed -i '' 's/add_llvm_tool(llvm-config/# add_llvm_tool(llvm-config/' tools/llvm-config/CMakeLists.txt || true
-    
-    - name: Build All Tools
-      run: |
-        cd build
-        ninja clang lld llvm-ar llvm-ranlib llvm-strip llvm-objcopy \
-              llvm-objdump llvm-nm llvm-size llvm-strings llvm-readelf \
-              llvm-addr2line llvm-dwarfdump llvm-tblgen llvm-cov \
-              llvm-profdata llvm-symbolizer llvm-dwp runtimes 2>&1 | head -500
+        ninja runtimes
     
     - name: Package Full Toolchain
       run: |
-        cd build
         mkdir -p package/var/jb/usr/lib/llvm-23/bin \
                  package/var/jb/usr/lib \
                  package/var/jb/usr/include/c++/v1
         
-        # 複製所有 LLVM 工具（除了 llvm-config）
+        # 複製 iOS 版本的 LLVM 工具
+        cd build-ios
         if [ -d "bin" ]; then
           for tool in bin/*; do
-            toolname=$(basename "$tool")
-            if [[ "$toolname" != "llvm-config" ]] && [[ -f "$tool" ]] && [[ -x "$tool" ]]; then
-              cp "$tool" package/var/jb/usr/lib/llvm-23/bin/
+            if [[ -f "$tool" ]] && [[ -x "$tool" ]]; then
+              cp "$tool" ../package/var/jb/usr/lib/llvm-23/bin/
             fi
           done
         fi
         
-        # 複製 native llvm-config
-        cp ../build-native/bin/llvm-config package/var/jb/usr/lib/llvm-23/bin/
+        # 複製 native llvm-config（必須是 macOS 版本）
+        cp ../build-native/bin/llvm-config ../package/var/jb/usr/lib/llvm-23/bin/
+        cd ..
         
         # 複製 C++ 標頭
-        if [ -d "../llvm-project/libcxx/include" ]; then
-          cp -r ../llvm-project/libcxx/include/* package/var/jb/usr/include/c++/v1/
+        if [ -d "llvm-project/libcxx/include" ]; then
+          cp -r llvm-project/libcxx/include/* package/var/jb/usr/include/c++/v1/
         fi
         
         # 複製靜態庫
+        cd build-runtimes
         for lib in libc++.a libc++abi.a libunwind.a; do
           if [ -f "lib/$lib" ]; then
-            cp "lib/$lib" package/var/jb/usr/lib/
+            cp "lib/$lib" ../package/var/jb/usr/lib/
           fi
         done
         
         # 複製 compiler-rt builtins
         if [ -d "lib/clang" ]; then
-          mkdir -p package/var/jb/usr/lib/clang
-          cp -r lib/clang/* package/var/jb/usr/lib/clang/
+          mkdir -p ../package/var/jb/usr/lib/clang
+          cp -r lib/clang/* ../package/var/jb/usr/lib/clang/
         fi
+        cd ..
         
-        # 建立 symlinks (可選)
+        # 建立 symlinks
         cd package/var/jb/usr/lib/llvm-23/bin
         ln -sf clang clang++ 2>/dev/null || true
         ln -sf llvm-ar ar 2>/dev/null || true
@@ -156,4 +178,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: llvm-23-ios
-        path: build/llvm-23-ios.tar.gz
+        path: llvm-23-ios.tar.gz
