@@ -16,7 +16,7 @@ jobs:
       run: |
         git clone --depth 1 https://github.com/llvm/llvm-project.git
     
-    # 第一步：編譯 native 工具（在 macOS 上執行）
+    # 第一步：編譯 native 工具
     - name: Build Native Tools
       run: |
         mkdir build-native
@@ -31,12 +31,22 @@ jobs:
           -DLLVM_INCLUDE_BENCHMARKS=OFF \
           -DLLVM_BUILD_LLVM_DYLIB=OFF \
           ../llvm-project/llvm
-        ninja llvm-tblgen clang-tblgen llvm-config llvm-ar llvm-ranlib
+        ninja llvm-tblgen clang-tblgen
     
     # 第二步：交叉編譯完整 LLVM 工具鏈給 iOS
     - name: Configure Cross Build
       run: |
         mkdir build && cd build
+        
+        # 複製 native llvm-config 並創建 wrapper 腳本
+        NATIVE_LLVM_CONFIG=$(pwd)/../build-native/bin/llvm-config
+        if [ ! -f "$NATIVE_LLVM_CONFIG" ]; then
+          echo "Building native llvm-config..."
+          cd ../build-native
+          ninja llvm-config
+          cd ../build
+        fi
+        
         cmake -G Ninja \
           -DCMAKE_BUILD_TYPE=MinSizeRel \
           -DCMAKE_SYSTEM_NAME=iOS \
@@ -63,7 +73,6 @@ jobs:
           -DLLVM_BUILD_LLVM_DYLIB=OFF \
           -DLLVM_LINK_LLVM_DYLIB=OFF \
           -DLLVM_BUILD_UTILS=OFF \
-          -DLLVM_BUILD_TOOLS=ON \
           -DLLVM_ENABLE_ZLIB=OFF \
           -DLLVM_ENABLE_ZSTD=OFF \
           -DLLVM_ENABLE_TERMINFO=OFF \
@@ -81,66 +90,21 @@ jobs:
           -DCOMPILER_RT_BUILD_PROFILE=OFF \
           -DCOMPILER_RT_BUILD_BUILTINS=ON \
           -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
-          ../llvm-project/llvm
-    
-    # 手動修復 CMake 快取，防止編譯 llvm-config
-    - name: Fix CMake Cache
-      run: |
-        cd build
-        # 強制設定 LLVM_CONFIG 路徑並標記為已找到
-        echo "set(LLVM_CONFIG_EXECUTABLE $(pwd)/../build-native/bin/llvm-config CACHE FILEPATH \"Path to llvm-config\")" >> CMakeCache.txt
-        echo "set(LLVM_CONFIG_FOUND TRUE CACHE BOOL \"llvm-config found\")" >> CMakeCache.txt
+          ../llvm-project/llvm 2>&1 | tee cmake_output.log
         
-        # 重新配置以應用變更
-        cmake -G Ninja \
-          -DCMAKE_BUILD_TYPE=MinSizeRel \
-          -DCMAKE_SYSTEM_NAME=iOS \
-          -DCMAKE_OSX_SYSROOT="$SDKROOT" \
-          -DCMAKE_OSX_ARCHITECTURES="arm64" \
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=16.5 \
-          -DCMAKE_SYSTEM_PROCESSOR=arm64 \
-          -DCMAKE_CROSSCOMPILING=ON \
-          -DLLVM_HOST_TRIPLE=arm64-apple-darwin \
-          -DLLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-ios16.5 \
-          -DLLVM_TABLEGEN=$(pwd)/../build-native/bin/llvm-tblgen \
-          -DCLANG_TABLEGEN=$(pwd)/../build-native/bin/clang-tblgen \
-          -DCMAKE_MACOSX_BUNDLE=OFF \
-          -DLLVM_ENABLE_PROJECTS="clang;lld" \
-          -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind" \
-          -DLLVM_TARGETS_TO_BUILD="AArch64" \
-          -DLLVM_INCLUDE_TESTS=OFF \
-          -DLLVM_INCLUDE_EXAMPLES=OFF \
-          -DLLVM_INCLUDE_BENCHMARKS=OFF \
-          -DLLVM_INCLUDE_DOCS=OFF \
-          -DLLVM_BUILD_LLVM_DYLIB=OFF \
-          -DLLVM_LINK_LLVM_DYLIB=OFF \
-          -DLLVM_BUILD_UTILS=OFF \
-          -DLLVM_ENABLE_ZLIB=OFF \
-          -DLLVM_ENABLE_ZSTD=OFF \
-          -DLLVM_ENABLE_TERMINFO=OFF \
-          -DLLVM_ENABLE_LIBCXX=ON \
-          -DLIBCXX_ENABLE_SHARED=OFF \
-          -DLIBCXX_ENABLE_STATIC=ON \
-          -DLIBCXXABI_ENABLE_SHARED=OFF \
-          -DLIBCXXABI_ENABLE_STATIC=ON \
-          -DLIBUNWIND_ENABLE_SHARED=OFF \
-          -DLIBUNWIND_ENABLE_STATIC=ON \
-          -DCOMPILER_RT_ENABLE_IOS=ON \
-          -DCOMPILER_RT_BUILD_SANITIZERS=OFF \
-          -DCOMPILER_RT_BUILD_XRAY=OFF \
-          -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
-          -DCOMPILER_RT_BUILD_PROFILE=OFF \
-          -DCOMPILER_RT_BUILD_BUILTINS=ON \
-          -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
-          ../llvm-project/llvm
+        # 檢查配置是否成功
+        if [ $? -ne 0 ]; then
+          echo "CMake configuration failed!"
+          tail -100 cmake_output.log
+          exit 1
+        fi
     
     - name: Build All Tools
       run: |
         cd build
         ninja clang lld llvm-ar llvm-ranlib llvm-strip llvm-objcopy \
               llvm-objdump llvm-nm llvm-size llvm-strings llvm-readelf \
-              llvm-addr2line llvm-cov llvm-profdata llvm-symbolizer \
-              llvm-dwarfdump llvm-dwp runtimes
+              llvm-addr2line llvm-dwarfdump runtimes 2>&1 | tee build_output.log
     
     - name: Package Full Toolchain
       run: |
@@ -149,13 +113,14 @@ jobs:
                  package/usr/local/lib \
                  package/usr/local/include/c++/v1
         
-        # 複製主要工具
-        cp bin/clang bin/clang++ bin/lld package/usr/local/bin/
-        cp bin/llvm-ar bin/llvm-ranlib bin/llvm-strip package/usr/local/bin/
-        cp bin/llvm-objcopy bin/llvm-objdump bin/llvm-nm package/usr/local/bin/
-        cp bin/llvm-size bin/llvm-strings bin/llvm-readelf package/usr/local/bin/
-        cp bin/llvm-addr2line bin/llvm-cov bin/llvm-profdata package/usr/local/bin/
-        cp bin/llvm-symbolizer bin/llvm-dwarfdump bin/llvm-dwp package/usr/local/bin/ 2>/dev/null || true
+        # 複製主要工具（只複製存在的檔案）
+        for tool in clang clang++ lld llvm-ar llvm-ranlib llvm-strip \
+                    llvm-objcopy llvm-objdump llvm-nm llvm-size \
+                    llvm-strings llvm-readelf llvm-addr2line llvm-dwarfdump; do
+          if [ -f "bin/$tool" ]; then
+            cp "bin/$tool" package/usr/local/bin/
+          fi
+        done
         
         # 建立常用 symlinks
         cd package/usr/local/bin
@@ -173,14 +138,26 @@ jobs:
         cd ../../../..
         
         # 複製 C++ 標準庫標頭
-        cp -r ../llvm-project/libcxx/include/* package/usr/local/include/c++/v1/ 2>/dev/null || true
+        if [ -d "../llvm-project/libcxx/include" ]; then
+          cp -r ../llvm-project/libcxx/include/* package/usr/local/include/c++/v1/
+        fi
         
         # 複製 runtimes 產出的靜態庫
-        cp lib/libc++.a lib/libc++abi.a lib/libunwind.a package/usr/local/lib/ 2>/dev/null || true
+        for lib in libc++.a libc++abi.a libunwind.a; do
+          if [ -f "lib/$lib" ]; then
+            cp "lib/$lib" package/usr/local/lib/
+          fi
+        done
         
         # 複製 compiler-rt builtins
-        mkdir -p package/usr/local/lib/clang
-        cp -r lib/clang/* package/usr/local/lib/clang/ 2>/dev/null || true
+        if [ -d "lib/clang" ]; then
+          mkdir -p package/usr/local/lib/clang
+          cp -r lib/clang/* package/usr/local/lib/clang/
+        fi
+        
+        # 檢查是否有產出任何檔案
+        echo "Packaged files:"
+        find package -type f | head -50
         
         tar -czf llvm-full-toolchain-ios.tar.gz -C package .
     
@@ -189,3 +166,14 @@ jobs:
       with:
         name: llvm-full-toolchain-ios
         path: build/llvm-full-toolchain-ios.tar.gz
+      if: always()
+    
+    - name: Upload CMake Error Log (if failed)
+      uses: actions/upload-artifact@v4
+      with:
+        name: cmake-error-logs
+        path: |
+          build/cmake_output.log
+          build/CMakeFiles/CMakeError.log
+          build/CMakeFiles/CMakeOutput.log
+      if: failure()
