@@ -1,0 +1,117 @@
+name: Build Full LLVM for iOS ARM64
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 1 * *'
+
+jobs:
+  build-full-llvm:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout LLVM
+      uses: actions/checkout@v4
+      with:
+        repository: llvm/llvm-project
+        ref: main
+        depth: 1
+    
+    - name: Configure CMake
+      run: |
+        mkdir build && cd build
+        cmake -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra;lld;libcxx;libcxxabi;compiler-rt" \
+          -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" \
+          -DCMAKE_OSX_ARCHITECTURES="arm64" \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+          -DLLVM_TARGETS_TO_BUILD="AArch64" \
+          -DLLVM_DEFAULT_TARGET_TRIPLE="arm64-apple-ios13.0" \
+          -DLLVM_ENABLE_ASSERTIONS=OFF \
+          -DLLVM_INCLUDE_TESTS=OFF \
+          -DLLVM_INCLUDE_EXAMPLES=OFF \
+          -DLLVM_INCLUDE_BENCHMARKS=OFF \
+          -DLLVM_INCLUDE_DOCS=OFF \
+          -DLLVM_ENABLE_BINDINGS=OFF \
+          -DLLVM_ENABLE_TERMINFO=OFF \
+          -DLLVM_ENABLE_LIBEDIT=OFF \
+          -DLIBCXX_ENABLE_SHARED=ON \
+          -DLIBCXXABI_ENABLE_SHARED=ON \
+          -DLIBUNWIND_ENABLE_SHARED=ON \
+          -DCMAKE_CXX_FLAGS="-O3" \
+          ../llvm
+    
+    - name: Build Everything
+      run: |
+        cd build
+        ninja clang lld libcxx libcxxabi compiler-rt
+    
+    - name: Install to Prefix
+      run: |
+        cd build
+        mkdir -p install/usr/local
+        # 复制二进制
+        cp -r bin install/usr/local/
+        cp -r lib install/usr/local/
+        cp -r include install/usr/local/
+        # 复制 libc++
+        cp lib/libc++.dylib install/usr/local/lib/
+        cp lib/libc++abi.dylib install/usr/local/lib/
+        cp lib/libunwind.dylib install/usr/local/lib/
+    
+    - name: Create Framework Structure
+      run: |
+        cd build/install
+        # 创建 iOS 标准路径结构
+        mkdir -p llvm-ios/usr/local/{bin,lib,include/c++/v1}
+        cp -r usr/local/bin/* llvm-ios/usr/local/bin/
+        cp -r usr/local/lib/*.dylib llvm-ios/usr/local/lib/
+        cp -r usr/local/include/c++ llvm-ios/usr/local/include/
+        # 创建符号链接
+        cd llvm-ios/usr/local/bin
+        ln -sf clang clang-19
+        ln -sf clang++ clang++-19
+        # 设置 rpath
+        install_name_tool -id @rpath/libc++.dylib ../lib/libc++.dylib
+        install_name_tool -id @rpath/libc++abi.dylib ../lib/libc++abi.dylib
+    
+    - name: Package
+      run: |
+        cd build/install
+        tar -czf llvm-full-ios-arm64.tar.gz llvm-ios/
+    
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: llvm-full-ios-arm64
+        path: build/install/llvm-full-ios-arm64.tar.gz
+        retention-days: 7
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: build/install/llvm-full-ios-arm64.tar.gz
+        name: LLVM Full iOS ${{ github.ref_name }}
+        body: |
+          完整 LLVM 工具链 for iOS ARM64
+          - 包含: clang, lld, libc++, libc++abi, compiler-rt
+          - 支持 C++23 及更新标准
+          - 独立运行，不依赖系统 libc++
+
+  # 可选: 自动更新 latest 标签
+  update-latest:
+    needs: build-full-llvm
+    if: success()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update latest release
+        uses: andelf/nightly-release@main
+        with:
+          tag_name: latest
+          name: Latest Build
+          body: 最新开发版 LLVM
+          files: |
+            build/install/llvm-full-ios-arm64.tar.gz
