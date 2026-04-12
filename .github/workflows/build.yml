@@ -1,42 +1,44 @@
-name: Build Full LLVM for iOS ARM64
+name: Build LLVM TO iOS ARM64
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 1 * *'
 
 jobs:
-  build-full-llvm:
+  build-ios-toolchain:
     runs-on: macos-latest
     
     steps:
-    - name: Checkout LLVM
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
       with:
         repository: llvm/llvm-project
         ref: main
         depth: 1
     
-    - name: Configure CMake
+    - name: Setup iOS SDK
+      run: |
+        # 下载 iOS SDK
+        sudo xcode-select -s /Applications/Xcode_15.2.app/Contents/Developer
+        echo "SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
+        echo "IOS_DEPLOYMENT_TARGET=13.0" >> $GITHUB_ENV
+    
+    - name: Configure for iOS
       run: |
         mkdir build && cd build
         cmake -G Ninja \
           -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_SYSTEM_NAME=iOS \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+          -DCMAKE_OSX_ARCHITECTURES="arm64" \
+          -DCMAKE_C_COMPILER="clang" \
+          -DCMAKE_CXX_COMPILER="clang++" \
+          -DCMAKE_C_FLAGS="-arch arm64 -miphoneos-version-min=13.0" \
+          -DCMAKE_CXX_FLAGS="-arch arm64 -miphoneos-version-min=13.0" \
           -DLLVM_ENABLE_PROJECTS="clang;lld" \
           -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" \
-          -DCMAKE_OSX_ARCHITECTURES="arm64" \
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
           -DLLVM_TARGETS_TO_BUILD="AArch64" \
           -DLLVM_DEFAULT_TARGET_TRIPLE="arm64-apple-ios13.0" \
-          -DLLVM_ENABLE_ASSERTIONS=OFF \
-          -DLLVM_INCLUDE_TESTS=OFF \
-          -DLLVM_INCLUDE_EXAMPLES=OFF \
-          -DLLVM_INCLUDE_BENCHMARKS=OFF \
-          -DLLVM_INCLUDE_DOCS=OFF \
-          -DLLVM_ENABLE_BINDINGS=OFF \
-          -DLLVM_ENABLE_TERMINFO=OFF \
-          -DLLVM_ENABLE_LIBEDIT=OFF \
-          -DCMAKE_CXX_FLAGS="-O3" \
+          -DLLVM_HOST_TRIPLE="arm64-apple-ios13.0" \
+          -DCMAKE_SYSROOT=$SDKROOT \
           ../llvm
     
     - name: Build
@@ -44,31 +46,39 @@ jobs:
         cd build
         ninja clang lld
     
-    - name: Build Runtimes (libc++ etc.)
+    - name: Build Runtimes
       run: |
         cd build
-        # 构建 runtimes 需要单独配置
         ninja runtimes
     
-    - name: Package
+    - name: Package for iOS
       run: |
         cd build
-        mkdir -p package/usr/local/{bin,lib,include}
-        cp -r bin/* package/usr/local/bin/
-        cp -r lib/*.dylib package/usr/local/lib/ 2>/dev/null || true
-        cp -r include/c++ package/usr/local/include/ 2>/dev/null || true
+        mkdir -p package/usr/local/{bin,lib,include/c++/v1}
         
-        # 从 runtimes 目录复制 libc++
-        find runtimes -name "libc++.dylib" -exec cp {} package/usr/local/lib/ \;
-        find runtimes -name "libc++abi.dylib" -exec cp {} package/usr/local/lib/ \;
-        find runtimes -name "libunwind.dylib" -exec cp {} package/usr/local/lib/ \;
-        find runtimes -name "c++" -type d -exec cp -r {} package/usr/local/include/ \;
+        # 复制二进制
+        cp bin/clang package/usr/local/bin/
+        cp bin/clang++ package/usr/local/bin/
+        cp bin/lld package/usr/local/bin/
         
-        cd package
-        tar -czf ../llvm-ios-arm64.tar.gz .
+        # 复制 libc++
+        find runtimes -name "*.dylib" -exec cp {} package/usr/local/lib/ \;
+        find runtimes -name "*.a" -exec cp {} package/usr/local/lib/ \;
+        
+        # 复制头文件
+        find runtimes -name "c++" -type d -exec cp -r {}/* package/usr/local/include/c++/v1/ \;
+        
+        # 设置正确的平台标识
+        cd package/usr/local/bin
+        # 检查平台
+        file clang
+        otool -l clang | grep LC_VERSION_MIN_IPHONEOS
+        
+        cd ../..
+        tar -czf ../llvm-ios.tar.gz .
     
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
-        name: llvm-ios-arm64
-        path: build/llvm-ios-arm64.tar.gz
+        name: llvm-ios
+        path: build/llvm-ios.tar.gz
