@@ -4,22 +4,32 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Job 1: 編譯 native tools (完全乾淨的 macOS 環境)
-  build-native:
+  build:
     runs-on: macos-latest
-    outputs:
-      native-artifact: native-tools
     steps:
+    - name: Clone iOS SDK
+      run: |
+        git clone https://github.com/xybp888/iOS-SDKs.git
+        echo "IOS_SDKROOT=$(pwd)/iOS-SDKs/iPhoneOS16.5.sdk" >> $GITHUB_ENV
+    
     - name: Clone LLVM
       run: |
         git clone --depth 1 https://github.com/llvm/llvm-project.git
     
+    # 第一步：編譯 native 工具（使用 macOS SDK）
     - name: Build Native Tools
       run: |
+        # 獲取 macOS SDK 路徑
+        MACOS_SDK=$(xcrun --sdk macosx --show-sdk-path)
+        echo "Using macOS SDK: $MACOS_SDK"
+        
         mkdir build-native
         cd build-native
+        
+        # 強制使用 macOS SDK
         cmake -G Ninja \
           -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_OSX_SYSROOT="$MACOS_SDK" \
           -DLLVM_TARGETS_TO_BUILD="AArch64" \
           -DLLVM_ENABLE_PROJECTS="clang;lld" \
           -DLLVM_INCLUDE_TESTS=OFF \
@@ -27,49 +37,18 @@ jobs:
           -DLLVM_INCLUDE_BENCHMARKS=OFF \
           -DLLVM_BUILD_LLVM_DYLIB=OFF \
           ../llvm-project/llvm
+        
         ninja llvm-tblgen clang-tblgen llvm-config
     
-    - name: Upload Native Tools
-      uses: actions/upload-artifact@v4
-      with:
-        name: native-tools
-        path: |
-          build-native/bin/llvm-tblgen
-          build-native/bin/clang-tblgen
-          build-native/bin/llvm-config
-
-  # Job 2: 交叉編譯給 iOS
-  build-ios:
-    runs-on: macos-latest
-    needs: build-native
-    steps:
-    - name: Clone iOS SDK
-      run: |
-        git clone https://github.com/xybp888/iOS-SDKs.git
-        echo "SDKROOT=$(pwd)/iOS-SDKs/iPhoneOS16.5.sdk" >> $GITHUB_ENV
-    
-    - name: Clone LLVM
-      run: |
-        git clone --depth 1 https://github.com/llvm/llvm-project.git
-    
-    - name: Download Native Tools
-      uses: actions/download-artifact@v4
-      with:
-        name: native-tools
-        path: native-tools
-    
-    - name: Make Native Tools Executable
-      run: |
-        chmod +x native-tools/*
-        ls -la native-tools/
-    
+    # 第二步：交叉編譯給 iOS（使用 iOS SDK）
     - name: Configure Cross Build
       run: |
         mkdir build && cd build
+        
         cmake -G Ninja \
           -DCMAKE_BUILD_TYPE=MinSizeRel \
           -DCMAKE_SYSTEM_NAME=iOS \
-          -DCMAKE_OSX_SYSROOT="$SDKROOT" \
+          -DCMAKE_OSX_SYSROOT="$IOS_SDKROOT" \
           -DCMAKE_OSX_ARCHITECTURES="arm64" \
           -DCMAKE_OSX_DEPLOYMENT_TARGET=16.5 \
           -DCMAKE_SYSTEM_PROCESSOR=arm64 \
@@ -78,9 +57,9 @@ jobs:
           -DCMAKE_CXX_COMPILER_WORKS=ON \
           -DLLVM_HOST_TRIPLE=arm64-apple-darwin \
           -DLLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-ios16.5 \
-          -DLLVM_TABLEGEN=$(pwd)/../native-tools/llvm-tblgen \
-          -DCLANG_TABLEGEN=$(pwd)/../native-tools/clang-tblgen \
-          -DLLVM_CONFIG_PATH=$(pwd)/../native-tools/llvm-config \
+          -DLLVM_TABLEGEN=$(pwd)/../build-native/bin/llvm-tblgen \
+          -DCLANG_TABLEGEN=$(pwd)/../build-native/bin/clang-tblgen \
+          -DLLVM_CONFIG_PATH=$(pwd)/../build-native/bin/llvm-config \
           -DCMAKE_MACOSX_BUNDLE=OFF \
           -DLLVM_ENABLE_PROJECTS="clang;lld" \
           -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind" \
@@ -121,56 +100,37 @@ jobs:
     - name: Package Full Toolchain
       run: |
         cd build
-        mkdir -p package/usr/local/bin \
-                 package/usr/local/lib \
-                 package/usr/local/include/c++/v1
+        mkdir -p package/var/jb/usr/lib/llvm-23/bin \
+                 package/var/jb/usr/lib \
+                 package/var/jb/usr/include/c++/v1
         
-        # 複製主要工具
-        for tool in clang clang++ lld llvm-ar llvm-ranlib llvm-strip \
-                    llvm-objcopy llvm-objdump llvm-nm llvm-size \
-                    llvm-strings llvm-readelf llvm-addr2line llvm-dwarfdump; do
-          if [ -f "bin/$tool" ]; then
-            cp "bin/$tool" package/usr/local/bin/
-          fi
-        done
-        
-        # 建立 symlinks
-        cd package/usr/local/bin
-        ln -sf clang clang-cpp 2>/dev/null || true
-        ln -sf llvm-ar ar 2>/dev/null || true
-        ln -sf llvm-ranlib ranlib 2>/dev/null || true
-        ln -sf llvm-strip strip 2>/dev/null || true
-        ln -sf llvm-objcopy objcopy 2>/dev/null || true
-        ln -sf llvm-objdump objdump 2>/dev/null || true
-        ln -sf llvm-nm nm 2>/dev/null || true
-        ln -sf llvm-size size 2>/dev/null || true
-        ln -sf llvm-strings strings 2>/dev/null || true
-        ln -sf llvm-readelf readelf 2>/dev/null || true
-        ln -sf llvm-addr2line addr2line 2>/dev/null || true
-        cd ../../../..
+        # 複製所有 LLVM 工具
+        if [ -d "bin" ]; then
+          cp bin/* package/var/jb/usr/lib/llvm-23/bin/ 2>/dev/null || true
+        fi
         
         # 複製 C++ 標頭
         if [ -d "../llvm-project/libcxx/include" ]; then
-          cp -r ../llvm-project/libcxx/include/* package/usr/local/include/c++/v1/
+          cp -r ../llvm-project/libcxx/include/* package/var/jb/usr/include/c++/v1/
         fi
         
         # 複製靜態庫
         for lib in libc++.a libc++abi.a libunwind.a; do
           if [ -f "lib/$lib" ]; then
-            cp "lib/$lib" package/usr/local/lib/
+            cp "lib/$lib" package/var/jb/usr/lib/
           fi
         done
         
         # 複製 compiler-rt builtins
         if [ -d "lib/clang" ]; then
-          mkdir -p package/usr/local/lib/clang
-          cp -r lib/clang/* package/usr/local/lib/clang/
+          mkdir -p package/var/jb/usr/lib/clang
+          cp -r lib/clang/* package/var/jb/usr/lib/clang/
         fi
         
-        tar -czf llvm-full-toolchain-ios.tar.gz -C package .
+        tar -czf llvm-23-ios.tar.gz -C package .
     
     - name: Upload Full Toolchain
       uses: actions/upload-artifact@v4
       with:
-        name: llvm-full-toolchain-ios
-        path: build/llvm-full-toolchain-ios.tar.gz
+        name: llvm-23-ios
+        path: build/llvm-23-ios.tar.gz
