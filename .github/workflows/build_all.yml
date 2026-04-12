@@ -16,7 +16,7 @@ jobs:
       run: |
         git clone --depth 1 https://github.com/llvm/llvm-project.git
     
-    # 第一步：編譯 native tablegen 工具
+    # 第一步：編譯 native tablegen 工具（只需要 clang 和 lld 的 tablegen）
     - name: Build Native TableGen
       run: |
         mkdir build-native
@@ -25,10 +25,12 @@ jobs:
         cmake -G Ninja \
           -DCMAKE_BUILD_TYPE=Release \
           -DLLVM_TARGETS_TO_BUILD="AArch64" \
-          -DLLVM_ENABLE_PROJECTS="clang;lld;compiler-rt" \
-          -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" \
+          -DLLVM_ENABLE_PROJECTS="clang;lld" \
+          -DLLVM_INCLUDE_TESTS=OFF \
+          -DLLVM_INCLUDE_EXAMPLES=OFF \
+          -DLLVM_INCLUDE_BENCHMARKS=OFF \
           ../llvm-project/llvm
-        ninja llvm-tblgen clang-tblgen lld-tblgen
+        ninja llvm-tblgen clang-tblgen
     
     # 第二步：交叉編譯完整 LLVM 工具鏈給 iOS
     - name: Configure Cross Build
@@ -48,10 +50,9 @@ jobs:
           -DLLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-ios16.5 \
           -DLLVM_TABLEGEN=$(pwd)/../build-native/bin/llvm-tblgen \
           -DCLANG_TABLEGEN=$(pwd)/../build-native/bin/clang-tblgen \
-          -DLLD_TABLEGEN=$(pwd)/../build-native/bin/lld-tblgen \
           -DCMAKE_MACOSX_BUNDLE=OFF \
-          -DLLVM_ENABLE_PROJECTS="clang;lld;compiler-rt" \
-          -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" \
+          -DLLVM_ENABLE_PROJECTS="clang;lld" \
+          -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind" \
           -DLLVM_TARGETS_TO_BUILD="AArch64" \
           -DLLVM_INCLUDE_TESTS=OFF \
           -DLLVM_INCLUDE_EXAMPLES=OFF \
@@ -67,11 +68,15 @@ jobs:
           -DLIBCXX_ENABLE_STATIC=ON \
           -DLIBCXXABI_ENABLE_SHARED=OFF \
           -DLIBCXXABI_ENABLE_STATIC=ON \
+          -DLIBUNWIND_ENABLE_SHARED=OFF \
+          -DLIBUNWIND_ENABLE_STATIC=ON \
           -DCOMPILER_RT_ENABLE_IOS=ON \
           -DCOMPILER_RT_BUILD_SANITIZERS=OFF \
           -DCOMPILER_RT_BUILD_XRAY=OFF \
           -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
-          -DCOMPILER_RT_BUILD_PROFILE=ON \
+          -DCOMPILER_RT_BUILD_PROFILE=OFF \
+          -DCOMPILER_RT_BUILD_BUILTINS=ON \
+          -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
           ../llvm-project/llvm
     
     - name: Build All Tools
@@ -80,18 +85,13 @@ jobs:
         ninja clang lld llvm-ar llvm-ranlib llvm-strip llvm-objcopy \
               llvm-objdump llvm-nm llvm-size llvm-strings llvm-readelf \
               llvm-addr2line llvm-cov llvm-profdata llvm-symbolizer \
-              llvm-dwarfdump llvm-dwp
-    
-    - name: Build Runtimes
-      run: |
-        cd build
-        ninja runtimes
+              llvm-dwarfdump llvm-dwp runtimes
     
     - name: Package Full Toolchain
       run: |
         cd build
         mkdir -p package/usr/local/bin \
-                 package/usr/local/lib/clang/23/lib/darwin \
+                 package/usr/local/lib \
                  package/usr/local/include/c++/v1
         
         # 複製主要工具
@@ -104,27 +104,25 @@ jobs:
         
         # 建立常用 symlinks
         cd package/usr/local/bin
-        ln -sf clang clang-cpp
-        ln -sf llvm-ar ar
-        ln -sf llvm-ranlib ranlib
-        ln -sf llvm-strip strip
-        ln -sf llvm-objcopy objcopy
-        ln -sf llvm-objdump objdump
-        ln -sf llvm-nm nm
-        ln -sf llvm-size size
-        ln -sf llvm-strings strings
-        ln -sf llvm-readelf readelf
-        ln -sf llvm-addr2line addr2line
+        ln -sf clang clang-cpp 2>/dev/null || true
+        ln -sf llvm-ar ar 2>/dev/null || true
+        ln -sf llvm-ranlib ranlib 2>/dev/null || true
+        ln -sf llvm-strip strip 2>/dev/null || true
+        ln -sf llvm-objcopy objcopy 2>/dev/null || true
+        ln -sf llvm-objdump objdump 2>/dev/null || true
+        ln -sf llvm-nm nm 2>/dev/null || true
+        ln -sf llvm-size size 2>/dev/null || true
+        ln -sf llvm-strings strings 2>/dev/null || true
+        ln -sf llvm-readelf readelf 2>/dev/null || true
+        ln -sf llvm-addr2line addr2line 2>/dev/null || true
         cd ../../../..
         
         # 複製 C++ 標準庫標頭
         cp -r ../llvm-project/libcxx/include/* package/usr/local/include/c++/v1/ 2>/dev/null || true
         
-        # 複製 compiler-rt builtins
-        cp lib/clang/23/lib/darwin/libclang_rt.*.a package/usr/local/lib/clang/23/lib/darwin/ 2>/dev/null || true
-        
-        # 複製靜態庫
+        # 複製 runtimes 產出的靜態庫
         cp lib/libc++.a lib/libc++abi.a lib/libunwind.a package/usr/local/lib/ 2>/dev/null || true
+        cp lib/clang/*/lib/darwin/libclang_rt.*.a package/usr/local/lib/ 2>/dev/null || true
         
         tar -czf llvm-full-toolchain-ios.tar.gz -C package .
     
