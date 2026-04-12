@@ -74,6 +74,9 @@ jobs:
           -DLLVM_ENABLE_ZSTD=OFF \
           -DLLVM_ENABLE_TERMINFO=OFF \
           -DLLVM_INCLUDE_RUNTIMES=OFF \
+          -DCMAKE_EXE_LINKER_FLAGS="-Wl,-dead_strip" \
+          -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-dead_strip" \
+          -DHAVE_LINK_GC_SECTIONS=OFF \
           ../llvm-project/llvm
         
         ninja clang lld llvm-ar llvm-ranlib llvm-strip llvm-objcopy \
