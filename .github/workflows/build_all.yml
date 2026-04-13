@@ -35,25 +35,38 @@ jobs:
           -DLLVM_INCLUDE_BENCHMARKS=OFF \
           ../llvm-project/llvm
         
-        # 建置所有需要的工具
         ninja llvm-tblgen clang-tblgen llvm-config llvm-ar llvm-ranlib
     
     # 第二步：建置 iOS 目標的 LLVM 核心（不包含 runtimes）
     - name: Build LLVM Core for iOS
       run: |
+        # 清理可能存在的舊建置
+        rm -rf build-ios
         mkdir build-ios
         cd build-ios
         
+        # 創建工具鏈檔案來強制覆蓋鏈接器選項
+        cat > ios.toolchain.cmake << 'EOF'
+        set(CMAKE_SYSTEM_NAME iOS)
+        set(CMAKE_OSX_ARCHITECTURES arm64)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET 16.5)
+        set(CMAKE_CROSSCOMPILING ON)
+        
+        # 強制覆蓋鏈接器選項
+        set(CMAKE_EXE_LINKER_FLAGS_INIT "-Wl,-dead_strip")
+        set(CMAKE_SHARED_LINKER_FLAGS_INIT "-Wl,-dead_strip")
+        set(CMAKE_MODULE_LINKER_FLAGS_INIT "-Wl,-dead_strip")
+        
+        # 禁用 GCC 風格的 gc-sections
+        set(HAVE_LINK_GC_SECTIONS OFF CACHE BOOL "No gc-sections support" FORCE)
+        set(LLVM_HAS_LINK_GC_SECTIONS OFF CACHE BOOL "No gc-sections support" FORCE)
+        EOF
+        
         cmake -G Ninja \
+          -DCMAKE_TOOLCHAIN_FILE=ios.toolchain.cmake \
           -DCMAKE_BUILD_TYPE=MinSizeRel \
-          -DCMAKE_SYSTEM_NAME=iOS \
           -DCMAKE_OSX_SYSROOT="$IOS_SDKROOT" \
-          -DCMAKE_OSX_ARCHITECTURES="arm64" \
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=16.5 \
           -DCMAKE_SYSTEM_PROCESSOR=arm64 \
-          -DCMAKE_CROSSCOMPILING=ON \
-          -DCMAKE_C_COMPILER_WORKS=ON \
-          -DCMAKE_CXX_COMPILER_WORKS=ON \
           -DLLVM_HOST_TRIPLE=arm64-apple-darwin \
           -DLLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-ios16.5 \
           -DLLVM_TABLEGEN=$(pwd)/../build-native/bin/llvm-tblgen \
@@ -74,36 +87,51 @@ jobs:
           -DLLVM_ENABLE_ZSTD=OFF \
           -DLLVM_ENABLE_TERMINFO=OFF \
           -DLLVM_INCLUDE_RUNTIMES=OFF \
-          -DCMAKE_EXE_LINKER_FLAGS="-Wl,-dead_strip" \
-          -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-dead_strip" \
-          -DHAVE_LINK_GC_SECTIONS=OFF \
           ../llvm-project/llvm
         
+        # 修補所有生成的檔案，移除任何殘留的 --gc-sections
+        find . -type f \( -name "*.cmake" -o -name "build.ninja" -o -name "CMakeCache.txt" -o -name "*.make" \) -exec sed -i '' 's/--gc-sections/-dead_strip/g' {} \; 2>/dev/null || true
+        find . -type f \( -name "*.cmake" -o -name "build.ninja" -o -name "CMakeCache.txt" -o -name "*.make" \) -exec sed -i '' 's/-Wl,--gc-sections/-Wl,-dead_strip/g' {} \; 2>/dev/null || true
+        
+        # 開始建置
         ninja clang lld llvm-ar llvm-ranlib llvm-strip llvm-objcopy \
               llvm-objdump llvm-nm llvm-size llvm-strings llvm-readelf \
               llvm-addr2line llvm-dwarfdump llvm-cov llvm-profdata \
-              llvm-symbolizer llvm-dwp
+              llvm-symbolizer llvm-dwp 2>&1 | tee build.log
     
     # 第三步：單獨建置 runtimes（compiler-rt, libcxx 等）
     - name: Build Runtimes for iOS
       run: |
+        rm -rf build-runtimes
         mkdir build-runtimes
         cd build-runtimes
         
         # 使用剛建置的 iOS clang 來編譯 runtimes
         IOS_CLANG=$(pwd)/../build-ios/bin/clang
         
+        # 創建 runtime 專用的工具鏈檔案
+        cat > ios.runtime.toolchain.cmake << 'EOF'
+        set(CMAKE_SYSTEM_NAME iOS)
+        set(CMAKE_OSX_ARCHITECTURES arm64)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET 16.5)
+        set(CMAKE_CROSSCOMPILING ON)
+        
+        set(CMAKE_EXE_LINKER_FLAGS_INIT "-Wl,-dead_strip")
+        set(CMAKE_SHARED_LINKER_FLAGS_INIT "-Wl,-dead_strip")
+        set(CMAKE_MODULE_LINKER_FLAGS_INIT "-Wl,-dead_strip")
+        
+        set(HAVE_LINK_GC_SECTIONS OFF CACHE BOOL "No gc-sections support" FORCE)
+        set(LLVM_HAS_LINK_GC_SECTIONS OFF CACHE BOOL "No gc-sections support" FORCE)
+        EOF
+        
         cmake -G Ninja \
+          -DCMAKE_TOOLCHAIN_FILE=ios.runtime.toolchain.cmake \
           -DCMAKE_BUILD_TYPE=MinSizeRel \
-          -DCMAKE_SYSTEM_NAME=iOS \
           -DCMAKE_OSX_SYSROOT="$IOS_SDKROOT" \
-          -DCMAKE_OSX_ARCHITECTURES="arm64" \
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=16.5 \
           -DCMAKE_C_COMPILER="$IOS_CLANG" \
           -DCMAKE_CXX_COMPILER="$IOS_CLANG++" \
           -DCMAKE_AR=$(pwd)/../build-ios/bin/llvm-ar \
           -DCMAKE_RANLIB=$(pwd)/../build-ios/bin/llvm-ranlib \
-          -DCMAKE_CROSSCOMPILING=ON \
           -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind" \
           -DLLVM_ENABLE_LIBCXX=ON \
           -DLIBCXX_ENABLE_SHARED=OFF \
@@ -121,7 +149,11 @@ jobs:
           -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
           ../llvm-project/llvm
         
-        ninja runtimes
+        # 修補所有生成的檔案
+        find . -type f \( -name "*.cmake" -o -name "build.ninja" \) -exec sed -i '' 's/--gc-sections/-dead_strip/g' {} \; 2>/dev/null || true
+        find . -type f \( -name "*.cmake" -o -name "build.ninja" \) -exec sed -i '' 's/-Wl,--gc-sections/-Wl,-dead_strip/g' {} \; 2>/dev/null || true
+        
+        ninja runtimes 2>&1 | tee build-runtimes.log
     
     - name: Package Full Toolchain
       run: |
@@ -133,7 +165,7 @@ jobs:
         cd build-ios
         if [ -d "bin" ]; then
           for tool in bin/*; do
-            if [[ -f "$tool" ]] && [[ -x "$tool" ]]; then
+            if [[ -f "$tool" ]] && [[ -x "$tool" ]] && [[ "$(basename $tool)" != "llvm-config" ]]; then
               cp "$tool" ../package/var/jb/usr/lib/llvm-23/bin/
             fi
           done
