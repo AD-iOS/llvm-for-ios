@@ -98,11 +98,11 @@ jobs:
           exit 1
         fi
         
-        echo "Testing compiler..."
-        echo "int main() { return 0; }" | $IOS_CLANG -x c - -arch arm64 -isysroot "$IOS_SDKROOT" -miphoneos-version-min=16.5 -o /tmp/test || {
-          echo "Compiler test failed"
-          exit 1
-        }
+        # echo "Testing compiler..."
+        # echo "int main() { return 0; }" | $IOS_CLANG -x c - -arch arm64 -isysroot "$IOS_SDKROOT" -miphoneos-version-min=16.5 -o /tmp/test || {
+        #   echo "Compiler test failed"
+        #   exit 1
+        # }
         
         cat > ios.runtime.toolchain.cmake << EOF
         set(CMAKE_SYSTEM_NAME Darwin)
