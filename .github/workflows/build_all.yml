@@ -39,28 +39,34 @@ jobs:
         cd build-ios
         
         cat > ios.toolchain.cmake << 'EOF'
-        set(CMAKE_SYSTEM_NAME iOS)
-        set(CMAKE_OSX_ARCHITECTURES arm64)
-        set(CMAKE_OSX_DEPLOYMENT_TARGET 16.5)
+        set(CMAKE_SYSTEM_NAME Darwin)
+        set(CMAKE_SYSTEM_PROCESSOR arm64)
         set(CMAKE_CROSSCOMPILING ON)
         
-        set(CMAKE_EXE_LINKER_FLAGS "-Wl,-dead_strip" CACHE STRING "" FORCE)
-        set(CMAKE_SHARED_LINKER_FLAGS "-Wl,-dead_strip" CACHE STRING "" FORCE)
-        set(CMAKE_MODULE_LINKER_FLAGS "-Wl,-dead_strip" CACHE STRING "" FORCE)
+        set(CMAKE_OSX_SYSROOT "$ENV{IOS_SDKROOT}")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET 16.5)
+        set(CMAKE_OSX_ARCHITECTURES arm64)
+        
+        set(CMAKE_C_COMPILER_TARGET arm64-apple-ios16.5)
+        set(CMAKE_CXX_COMPILER_TARGET arm64-apple-ios16.5)
+        set(CMAKE_ASM_COMPILER_TARGET arm64-apple-ios16.5)
+        
+        set(CMAKE_FIND_ROOT_PATH "$ENV{IOS_SDKROOT}")
+        set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+        set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+        set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
         EOF
         
         cmake -G Ninja \
           -DCMAKE_TOOLCHAIN_FILE=ios.toolchain.cmake \
           -DCMAKE_BUILD_TYPE=MinSizeRel \
           -DCMAKE_OSX_SYSROOT="$IOS_SDKROOT" \
-          -DCMAKE_SYSTEM_PROCESSOR=arm64 \
-          -DLLVM_HOST_TRIPLE=arm64-apple-darwin \
+          -DLLVM_HOST_TRIPLE=arm64-apple-ios16.5 \
           -DLLVM_DEFAULT_TARGET_TRIPLE=arm64-apple-ios16.5 \
-          -DLLVM_TABLEGEN=${{ github.workspace }}/build-native/bin/llvm-tblgen \
-          -DCLANG_TABLEGEN=${{ github.workspace }}/build-native/bin/clang-tblgen \
-          -DLLVM_CONFIG_PATH=${{ github.workspace }}/build-native/bin/llvm-config \
-          -DLLVM_TOOL_LLVM_CONFIG_BUILD=OFF \
-          -DCMAKE_MACOSX_BUNDLE=OFF \
+          -DLLVM_TARGET_ARCH=AArch64 \
+          -DLLVM_TABLEGEN="${{ github.workspace }}/build-native/bin/llvm-tblgen" \
+          -DCLANG_TABLEGEN="${{ github.workspace }}/build-native/bin/clang-tblgen" \
+          -DLLVM_CONFIG_PATH="${{ github.workspace }}/build-native/bin/llvm-config" \
           -DLLVM_ENABLE_PROJECTS="clang;lld" \
           -DLLVM_TARGETS_TO_BUILD="AArch64" \
           -DLLVM_INCLUDE_TESTS=OFF \
@@ -69,31 +75,17 @@ jobs:
           -DLLVM_INCLUDE_DOCS=OFF \
           -DLLVM_BUILD_LLVM_DYLIB=OFF \
           -DLLVM_LINK_LLVM_DYLIB=OFF \
-          -DLLVM_BUILD_UTILS=OFF \
           -DLLVM_ENABLE_ZLIB=OFF \
           -DLLVM_ENABLE_ZSTD=OFF \
           -DLLVM_ENABLE_TERMINFO=OFF \
-          -DLLVM_INCLUDE_RUNTIMES=OFF \
+          -DCMAKE_C_COMPILER_WORKS=ON \
+          -DCMAKE_CXX_COMPILER_WORKS=ON \
           ../llvm-project/llvm
-        
-        sed -i '' 's/--gc-sections/-dead_strip/g' build.ninja
-        sed -i '' 's/-Wl,--gc-sections/-Wl,-dead_strip/g' build.ninja
-        sed -i 's/--gc-sections/-dead_strip/g' build.ninja || true
-        sed -i 's/-Wl,--gc-sections/-Wl,-dead_strip/g' build.ninja || true
         
         ninja clang lld llvm-ranlib llvm-strip llvm-objcopy \
               llvm-objdump llvm-nm llvm-size llvm-strings \
               llvm-readelf llvm-addr2line llvm-dwarfdump \
-              llvm-cov llvm-profdata llvm-symbolizer 2>&1 | head -100
-    
-    - name: Build llvm-ar separately
-      continue-on-error: true
-      run: |
-        cd build-ios
-        ninja llvm-ar || echo "llvm-ar build failed, using native version"
-        if [ ! -f bin/llvm-ar ]; then
-          cp ../build-native/bin/llvm-ar bin/
-        fi
+              llvm-cov llvm-profdata llvm-symbolizer llvm-ar
     
     - name: Build Runtimes for iOS
       run: |
@@ -113,17 +105,26 @@ jobs:
         }
         
         cat > ios.runtime.toolchain.cmake << EOF
-        set(CMAKE_SYSTEM_NAME iOS)
-        set(CMAKE_OSX_ARCHITECTURES arm64)
-        set(CMAKE_OSX_DEPLOYMENT_TARGET 16.5)
+        set(CMAKE_SYSTEM_NAME Darwin)
+        set(CMAKE_SYSTEM_PROCESSOR arm64)
         set(CMAKE_CROSSCOMPILING ON)
+        
+        set(CMAKE_OSX_SYSROOT "$IOS_SDKROOT")
+        set(CMAKE_OSX_DEPLOYMENT_TARGET 16.5)
+        set(CMAKE_OSX_ARCHITECTURES arm64)
         
         set(CMAKE_C_COMPILER "$IOS_CLANG")
         set(CMAKE_CXX_COMPILER "${IOS_CLANG}++")
         set(CMAKE_ASM_COMPILER "$IOS_CLANG")
         
-        set(CMAKE_EXE_LINKER_FLAGS "-Wl,-dead_strip" CACHE STRING "" FORCE)
-        set(CMAKE_SHARED_LINKER_FLAGS "-Wl,-dead_strip" CACHE STRING "" FORCE)
+        set(CMAKE_C_COMPILER_TARGET arm64-apple-ios16.5)
+        set(CMAKE_CXX_COMPILER_TARGET arm64-apple-ios16.5)
+        set(CMAKE_ASM_COMPILER_TARGET arm64-apple-ios16.5)
+        
+        set(CMAKE_FIND_ROOT_PATH "$IOS_SDKROOT")
+        set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+        set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+        set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
         EOF
         
         cmake -G Ninja \
@@ -133,6 +134,7 @@ jobs:
           -DCMAKE_AR="${{ github.workspace }}/build-ios/bin/llvm-ar" \
           -DCMAKE_RANLIB="${{ github.workspace }}/build-ios/bin/llvm-ranlib" \
           -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind" \
+          -DLLVM_RUNTIME_TARGETS="arm64-apple-ios16.5" \
           -DLLVM_ENABLE_LIBCXX=ON \
           -DLIBCXX_ENABLE_SHARED=OFF \
           -DLIBCXX_ENABLE_STATIC=ON \
@@ -147,10 +149,9 @@ jobs:
           -DCOMPILER_RT_BUILD_PROFILE=OFF \
           -DCOMPILER_RT_BUILD_BUILTINS=ON \
           -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
+          -DCMAKE_C_COMPILER_WORKS=ON \
+          -DCMAKE_CXX_COMPILER_WORKS=ON \
           ../llvm-project/llvm
-        
-        sed -i '' 's/--gc-sections/-dead_strip/g' build.ninja 2>/dev/null || true
-        sed -i 's/--gc-sections/-dead_strip/g' build.ninja 2>/dev/null || true
         
         ninja runtimes
     
@@ -160,6 +161,7 @@ jobs:
                  package/var/jb/usr/lib \
                  package/var/jb/usr/include/c++/v1
         
+        # 複製 iOS 工具
         cd build-ios
         if [ -d "bin" ]; then
           for tool in bin/*; do
@@ -170,12 +172,27 @@ jobs:
         fi
         cd ..
         
+        # 複製 native llvm-config
         cp build-native/bin/llvm-config package/var/jb/usr/lib/llvm-23/bin/
         
+        # 建立 symlinks
+        cd package/var/jb/usr/lib/llvm-23/bin
+        ln -sf clang clang++
+        ln -sf llvm-ar ar
+        ln -sf llvm-ranlib ranlib
+        ln -sf llvm-strip strip
+        ln -sf llvm-objcopy objcopy
+        ln -sf llvm-objdump objdump
+        ln -sf llvm-nm nm
+        ln -sf llvm-strings strings
+        cd ${{ github.workspace }}
+        
+        # 複製 C++ 標頭檔
         if [ -d "llvm-project/libcxx/include" ]; then
           cp -r llvm-project/libcxx/include/* package/var/jb/usr/include/c++/v1/
         fi
         
+        # 複製 runtime 函式庫
         cd build-runtimes
         for lib in libc++.a libc++abi.a libunwind.a; do
           if [ -f "lib/$lib" ]; then
@@ -189,18 +206,7 @@ jobs:
         fi
         cd ..
         
-        # 建立 symlinks
-        # cd package/var/jb/usr/lib/llvm-23/bin
-        # ln -sf clang clang++ 2>/dev/null || true
-        # ln -sf llvm-ar ar 2>/dev/null || true
-        # ln -sf llvm-ranlib ranlib 2>/dev/null || true
-        # ln -sf llvm-strip strip 2>/dev/null || true
-        # ln -sf llvm-objcopy objcopy 2>/dev/null || true
-        # ln -sf llvm-objdump objdump 2>/dev/null || true
-        # ln -sf llvm-nm nm 2>/dev/null || true
-        # ln -sf llvm-strings strings 2>/dev/null || true
-        # cd ${{ github.workspace }}
-        
+        # 建立壓縮檔
         tar -czf llvm-for-ios-full.tar.gz -C package .
     
     - name: Upload Full Toolchain
