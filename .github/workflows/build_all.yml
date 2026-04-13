@@ -109,41 +109,40 @@ jobs:
         mkdir build-runtimes
         cd build-runtimes
         
-        IOS_CLANG="${{ github.workspace }}/build-ios/bin/clang"
-        if [ ! -f "$IOS_CLANG" ]; then
-          echo "Error: iOS clang not found at $IOS_CLANG"
-          exit 1
-        fi
-        
-        cat > ios.runtime.toolchain.cmake << EOF
+        # 改用 EOF 單引號，讓環境變數留給 CMake 去解析
+        cat > ios.runtime.toolchain.cmake << 'EOF'
         set(CMAKE_SYSTEM_NAME Darwin)
         set(CMAKE_SYSTEM_PROCESSOR arm64)
         set(CMAKE_CROSSCOMPILING ON)
         
-        set(CMAKE_OSX_SYSROOT "$IOS_SDKROOT")
+        set(CMAKE_OSX_SYSROOT "$ENV{IOS_SDKROOT}")
         set(CMAKE_OSX_DEPLOYMENT_TARGET 16.5)
         set(CMAKE_OSX_ARCHITECTURES arm64)
         
-        set(CMAKE_C_COMPILER "$IOS_CLANG")
-        set(CMAKE_CXX_COMPILER "${IOS_CLANG}++")
-        set(CMAKE_ASM_COMPILER "$IOS_CLANG")
+        # 關鍵修正：呼叫 macOS Host 系統自帶的編譯器
+        execute_process(COMMAND xcrun --find clang OUTPUT_VARIABLE HOST_CC OUTPUT_STRIP_TRAILING_WHITESPACE)
+        execute_process(COMMAND xcrun --find clang++ OUTPUT_VARIABLE HOST_CXX OUTPUT_STRIP_TRAILING_WHITESPACE)
+        
+        set(CMAKE_C_COMPILER "${HOST_CC}")
+        set(CMAKE_CXX_COMPILER "${HOST_CXX}")
+        set(CMAKE_ASM_COMPILER "${HOST_CC}")
         
         set(CMAKE_C_COMPILER_TARGET arm64-apple-ios16.5)
         set(CMAKE_CXX_COMPILER_TARGET arm64-apple-ios16.5)
         set(CMAKE_ASM_COMPILER_TARGET arm64-apple-ios16.5)
         
-        set(CMAKE_FIND_ROOT_PATH "$IOS_SDKROOT")
+        set(CMAKE_FIND_ROOT_PATH "$ENV{IOS_SDKROOT}")
         set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
         set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
         set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
         EOF
         
+        # 移除指向 iOS 版 llvm-ar/ranlib 的參數，讓系統自動使用 macOS 原生的 ar 即可
+        # 移除 CMAKE_COMPILER_WORKS=ON，讓 CMake 正常測試編譯器
         cmake -G Ninja \
           -DCMAKE_TOOLCHAIN_FILE=ios.runtime.toolchain.cmake \
           -DCMAKE_BUILD_TYPE=MinSizeRel \
           -DCMAKE_OSX_SYSROOT="$IOS_SDKROOT" \
-          -DCMAKE_AR="${{ github.workspace }}/build-ios/bin/llvm-ar" \
-          -DCMAKE_RANLIB="${{ github.workspace }}/build-ios/bin/llvm-ranlib" \
           -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind" \
           -DLLVM_RUNTIME_TARGETS="arm64-apple-ios16.5" \
           -DLLVM_ENABLE_LIBCXX=ON \
@@ -160,8 +159,6 @@ jobs:
           -DCOMPILER_RT_BUILD_PROFILE=OFF \
           -DCOMPILER_RT_BUILD_BUILTINS=ON \
           -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
-          -DCMAKE_C_COMPILER_WORKS=ON \
-          -DCMAKE_CXX_COMPILER_WORKS=ON \
           ../llvm-project/llvm
         
         ninja runtimes
