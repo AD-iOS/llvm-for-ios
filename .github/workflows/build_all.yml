@@ -66,9 +66,6 @@ jobs:
         set(CMAKE_CXX_FLAGS "-target arm64-apple-ios16.5 -arch arm64 -isysroot $ENV{IOS_SDKROOT} -miphoneos-version-min=16.5 -stdlib=libc++" CACHE STRING "" FORCE)
         set(CMAKE_ASM_FLAGS "-target arm64-apple-ios16.5 -arch arm64 -isysroot $ENV{IOS_SDKROOT} -miphoneos-version-min=16.5" CACHE STRING "" FORCE)
         
-        # 關鍵：告訴 CMake 不要嘗試執行測試程式
-        set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
-        
         set(CMAKE_FIND_ROOT_PATH "$ENV{IOS_SDKROOT}")
         set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
         set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
@@ -97,6 +94,9 @@ jobs:
           -DLLVM_ENABLE_ZLIB=OFF \
           -DLLVM_ENABLE_ZSTD=OFF \
           -DLLVM_ENABLE_TERMINFO=OFF \
+          -DCMAKE_C_COMPILER_WORKS=ON \
+          -DCMAKE_CXX_COMPILER_WORKS=ON \
+          -DHAVE_LIBRT=0 \
           ../llvm-project/llvm
         
         ninja clang lld llvm-ranlib llvm-strip llvm-objcopy \
@@ -114,12 +114,6 @@ jobs:
           echo "Error: iOS clang not found at $IOS_CLANG"
           exit 1
         fi
-        
-        # echo "Testing compiler..."
-        # echo "int main() { return 0; }" | $IOS_CLANG -x c - -arch arm64 -isysroot "$IOS_SDKROOT" -miphoneos-version-min=16.5 -o /tmp/test || {
-        #   echo "Compiler test failed"
-        #   exit 1
-        # }
         
         cat > ios.runtime.toolchain.cmake << EOF
         set(CMAKE_SYSTEM_NAME Darwin)
@@ -174,7 +168,7 @@ jobs:
     
     - name: Package Full Toolchain
       run: |
-        mkdir -p package/var/jb/usr/lib/llvm-23/bin \
+        mkdir -p package/var/jb/usr/lib/llvm-main/bin \
                  package/var/jb/usr/lib \
                  package/var/jb/usr/include/c++/v1
         
@@ -183,17 +177,17 @@ jobs:
         if [ -d "bin" ]; then
           for tool in bin/*; do
             if [[ -f "$tool" ]] && [[ -x "$tool" ]] && [[ "$(basename $tool)" != "llvm-config" ]]; then
-              cp "$tool" ../package/var/jb/usr/lib/llvm-23/bin/
+              cp "$tool" ../package/var/jb/usr/lib/llvm-main/bin/
             fi
           done
         fi
         cd ..
         
         # 複製 native llvm-config
-        cp build-native/bin/llvm-config package/var/jb/usr/lib/llvm-23/bin/
+        cp build-native/bin/llvm-config package/var/jb/usr/lib/llvm-main/bin/
         
         # 建立 symlinks
-        cd package/var/jb/usr/lib/llvm-23/bin
+        cd package/var/jb/usr/lib/llvm-main/bin
         ln -sf clang clang++
         ln -sf llvm-ar ar
         ln -sf llvm-ranlib ranlib
