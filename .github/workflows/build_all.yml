@@ -137,14 +137,11 @@ jobs:
         set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
         EOF
         
-        # 移除指向 iOS 版 llvm-ar/ranlib 的參數，讓系統自動使用 macOS 原生的 ar 即可
-        # 移除 CMAKE_COMPILER_WORKS=ON，讓 CMake 正常測試編譯器
         cmake -G Ninja \
           -DCMAKE_TOOLCHAIN_FILE=ios.runtime.toolchain.cmake \
           -DCMAKE_BUILD_TYPE=MinSizeRel \
           -DCMAKE_OSX_SYSROOT="$IOS_SDKROOT" \
           -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind" \
-          -DLLVM_RUNTIME_TARGETS="arm64-apple-ios16.5" \
           -DLLVM_ENABLE_LIBCXX=ON \
           -DLIBCXX_ENABLE_SHARED=OFF \
           -DLIBCXX_ENABLE_STATIC=ON \
@@ -159,9 +156,9 @@ jobs:
           -DCOMPILER_RT_BUILD_PROFILE=OFF \
           -DCOMPILER_RT_BUILD_BUILTINS=ON \
           -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
-          ../llvm-project/llvm
+          ../llvm-project/runtimes
         
-        ninja runtimes
+        ninja
     
     - name: Package Full Toolchain
       run: |
