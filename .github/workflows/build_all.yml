@@ -92,7 +92,8 @@ jobs:
         ninja clang lld llvm-ranlib llvm-strip llvm-objcopy \
               llvm-objdump llvm-nm llvm-size llvm-strings \
               llvm-readelf llvm-addr2line llvm-dwarfdump \
-              llvm-cov llvm-profdata llvm-symbolizer llvm-ar
+              llvm-cov llvm-profdata llvm-symbolizer llvm-ar \
+              llvm-config
 
     - name: Build Runtimes for iOS
       run: |
@@ -149,10 +150,19 @@ jobs:
                  package/var/jb/usr/lib \
                  package/var/jb/usr/include/c++/v1
 
+        # cd build-ios
+        # if [ -d "bin" ]; then
+        #   for tool in bin/*; do
+        #     if [[ -f "$tool" ]] && [[ -x "$tool" ]] && [[ "$(basename $tool)" != "llvm-config" ]]; then
+        #       cp "$tool" ../package/var/jb/usr/lib/llvm-main/bin/
+        #     fi
+        #   done
+        # fi
+        # cd ..
         cd build-ios
         if [ -d "bin" ]; then
           for tool in bin/*; do
-            if [[ -f "$tool" ]] && [[ -x "$tool" ]] && [[ "$(basename $tool)" != "llvm-config" ]]; then
+            if [[ -f "$tool" ]] && [[ -x "$tool" ]]; then
               cp "$tool" ../package/var/jb/usr/lib/llvm-main/bin/
             fi
           done
