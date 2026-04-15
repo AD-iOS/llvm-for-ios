@@ -169,7 +169,8 @@ jobs:
         fi
         cd ..
 
-        cp build-native/bin/llvm-config package/var/jb/usr/lib/llvm-main/bin/
+        # cp build-native/bin/llvm-config package/var/jb/usr/lib/llvm-main/bin/
+        cp build-ios/bin/llvm-config package/var/jb/usr/lib/llvm-main/bin/
 
         cd package/var/jb/usr/lib/llvm-main/bin
         # ln -sf clang clang++

@@ -11,11 +11,11 @@ jobs:
       run: |
         git clone https://github.com/xybp888/iOS-SDKs.git
         echo "SDKROOT=$(pwd)/iOS-SDKs/iPhoneOS16.5.sdk" >> $GITHUB_ENV
-    
+
     - name: Clone LLVM
       run: |
         git clone --depth 1 https://github.com/llvm/llvm-project.git
-    
+
     - name: Build Native TableGen
       run: |
         mkdir build-native
@@ -27,7 +27,7 @@ jobs:
           -DLLVM_ENABLE_PROJECTS="clang;lld" \
           ../llvm-project/llvm
         ninja -j$(sysctl -n hw.ncpu) llvm-tblgen clang-tblgen
-    
+
     - name: Configure Cross Build
       run: |
         mkdir build && cd build
@@ -58,19 +58,19 @@ jobs:
           -DLLVM_ENABLE_TERMINFO=OFF \
           -DLLVM_ENABLE_LIBCXX=ON \
           ../llvm-project/llvm
-    
+
     - name: Build
       run: |
         cd build
         ninja -j$(sysctl -n hw.ncpu) clang lld
-    
+
     - name: Package
       run: |
         cd build
         mkdir -p package/usr/local/bin
         cp bin/clang bin/clang++ bin/lld package/usr/local/bin/
         tar -czf llvm-for-ios.tar.gz -C package .
-    
+
     - name: Upload
       uses: actions/upload-artifact@v4
       with:
