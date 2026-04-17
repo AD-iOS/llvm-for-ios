@@ -183,9 +183,17 @@ jobs:
         # ln -sf llvm-strings strings
         cd ${{ github.workspace }}
 
-        if [ -d "llvm-project/libcxx/include" ]; then
-          cp -r llvm-project/libcxx/include/* package/var/jb/usr/include/c++/v1/
+        # if [ -d "llvm-project/libcxx/include" ]; then
+        #   cp -r llvm-project/libcxx/include/* package/var/jb/usr/include/c++/v1/
+        # fi
+
+        if [ -d "build-runtimes/include/c++/v1" ]; then
+            cp -r build-runtimes/include/c++/v1/* package/var/jb/usr/lib/llvm-main/include/c++/v1/
         fi
+
+        # if [ -d "build-runtimes/include/c++/v1/__config_site" ]; then
+        #     cp build-runtimes/include/c++/v1/__config_site package/var/jb/usr/include/c++/v1/
+        # fi
 
         # cd build-runtimes
         # for lib in libc++.a libc++abi.a libunwind.a; do
