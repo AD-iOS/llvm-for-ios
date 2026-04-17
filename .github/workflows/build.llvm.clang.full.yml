@@ -148,7 +148,8 @@ jobs:
       run: |
         mkdir -p package/var/jb/usr/lib/llvm-main/bin \
                  package/var/jb/usr/lib \
-                 package/var/jb/usr/include/c++/v1
+                 package/var/jb/usr/include/c++/v1 \
+                 package/var/jb/usr/lib/llvm-main/include/c++/v1/
 
         # cd build-ios
         # if [ -d "bin" ]; then
